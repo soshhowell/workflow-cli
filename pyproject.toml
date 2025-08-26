@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "workflow-cli"
+version = "0.1.0"
+description = "A CLI tool for executing defined workflows from JSON files"
+authors = [{name = "Workflow CLI Team"}]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "jsonschema>=4.0.0",
+]
+
+[project.scripts]
+workflow = "workflow_cli.main:main"
+
+[project.urls]
+Homepage = "https://github.com/workflow-cli/workflow-cli"
+Repository = "https://github.com/workflow-cli/workflow-cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["workflow_cli*"]

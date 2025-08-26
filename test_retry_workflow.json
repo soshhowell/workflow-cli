@@ -1,0 +1,19 @@
+{
+    "name": "test_retry_functionality",
+    "memory": {
+        "variables": {},
+        "schema": {}
+    },
+    "steps": [
+        {
+            "name": "test_failure_with_retries",
+            "command": "echo 'Attempt will fail regex' && exit 0",
+            "max_retries": 2,
+            "success": {
+                "regex": "SUCCESS_PATTERN_NOT_FOUND"
+            },
+            "delay": 2,
+            "retryDelay": 0.5
+        }
+    ]
+}

@@ -1,0 +1,421 @@
+"""Step executor for running command line operations."""
+
+import json
+import logging
+import re
+import subprocess
+import sys
+import time
+from typing import Any, Dict, List, Optional, Tuple
+
+import jsonschema
+
+
+class StepExecutor:
+    """Executes individual workflow steps."""
+    
+    def __init__(self, quiet: bool = False, workflow_id: str = None, logger: Optional[logging.Logger] = None):
+        """Initialize the step executor."""
+        self.step_count = 0
+        self.quiet = quiet
+        self.workflow_id = workflow_id
+        self.logger = logger
+        
+    def execute_step(self, step_name: str, command: str, memory: Dict[str, Any], success_config: Dict[str, Any] = None, memory_update_config: Dict[str, Any] = None, step_index: int = 1, delay: float = 0, retry_delay: float = 1, max_retries: int = 0, timeout: Optional[float] = None) -> Tuple[int, Dict[str, Any]]:
+        """Execute a single workflow step with retry and success validation.
+        
+        Args:
+            step_name: Name of the step being executed
+            command: Command line to execute with optional {memory.key} substitutions
+            memory: Workflow memory/state for variable substitution
+            success_config: Success validation configuration with regex and json patterns
+            memory_update_config: Memory update configuration with pattern and capture_groups
+            step_index: Index of the current step (1-based)
+            delay: Delay in seconds before executing this step
+            retry_delay: Delay in seconds between retry attempts
+            max_retries: Maximum number of retry attempts (default: 0)
+            timeout: Step execution timeout in seconds (default: 300 seconds if None)
+            
+        Returns:
+            Tuple of (exit_code, updated_memory) where exit_code is 0 for success
+        """
+        self.step_count += 1
+        success_config = success_config or {}
+        memory_update_config = memory_update_config or {}
+        success_regex = success_config.get('regex')
+        success_json = success_config.get('json')
+        
+        # Apply delay before step execution
+        if delay > 0:
+            if not self.quiet:
+                print(f"Waiting {delay} seconds before execution...")
+            if self.logger:
+                self.logger.info(f"Waiting {delay} seconds before execution...")
+            time.sleep(delay)
+        
+        # Perform variable substitution on the command
+        try:
+            processed_command = self._substitute_variables(command, memory)
+            if processed_command != command:
+                if not self.quiet:
+                    print(f"Command after substitution: {processed_command}")
+                if self.logger:
+                    self.logger.info(f"Command after substitution: {processed_command}")
+        except Exception as e:
+            if not self.quiet:
+                print(f"✗ Variable substitution failed: {e}", file=sys.stderr)
+            if self.logger:
+                self.logger.error(f"Variable substitution failed: {e}")
+            return 1, memory
+        
+        attempt = 0
+        while attempt <= max_retries:
+            if attempt > 0:
+                if not self.quiet:
+                    print(f"Retry attempt {attempt}/{max_retries}")
+                if self.logger:
+                    self.logger.info(f"Retry attempt {attempt}/{max_retries}")
+                time.sleep(retry_delay)
+            
+            try:
+                # Execute the processed command
+                result = subprocess.run(
+                    processed_command,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout if timeout is not None else 300  # Use step timeout or default to 5 minutes
+                )
+                
+                # Print and log output
+                full_output = ""
+                if result.stdout:
+                    if not self.quiet:
+                        print("Output:")
+                        print(result.stdout.rstrip())
+                    if self.logger:
+                        self.logger.info("Command stdout:")
+                        self.logger.info(result.stdout.rstrip())
+                    full_output += result.stdout
+                
+                if result.stderr:
+                    if not self.quiet:
+                        print("Error output:")
+                        print(result.stderr.rstrip(), file=sys.stderr)
+                    if self.logger:
+                        self.logger.info("Command stderr:")
+                        self.logger.info(result.stderr.rstrip())
+                    full_output += result.stderr
+                
+                # Determine success based on regex/JSON validation or exit code
+                success = self._validate_success(result.returncode, full_output, success_regex, success_json)
+                
+                if success:
+                    # Extract memory updates from output if configured
+                    updated_memory = self._extract_memory_updates(memory, full_output, memory_update_config, step_name)
+                    
+                    if not self.quiet:
+                        if self.workflow_id:
+                            print(f"✓ Step '{step_name}' completed successfully (workflow: {self.workflow_id})")
+                        else:
+                            print(f"✓ Step '{step_name}' completed successfully")
+                    
+                    if self.logger:
+                        self.logger.info(f"✓ Step '{step_name}' completed successfully (exit code: {result.returncode})")
+                        if updated_memory != memory:
+                            self.logger.info(f"Memory updated after step '{step_name}'")
+                    
+                    return 0, updated_memory
+                else:
+                    if not self.quiet:
+                        if success_regex:
+                            print(f"✗ Step '{step_name}' failed regex validation (exit code: {result.returncode})")
+                        elif success_json:
+                            print(f"✗ Step '{step_name}' failed JSON validation (exit code: {result.returncode})")
+                        else:
+                            print(f"✗ Step '{step_name}' failed with exit code {result.returncode}")
+                        
+                        # If we have more retries available, continue the loop
+                        if attempt < max_retries:
+                            print(f"Will retry in {retry_delay} second{'s' if retry_delay != 1 else ''}...")
+                    
+                    if self.logger:
+                        if success_regex:
+                            self.logger.error(f"✗ Step '{step_name}' failed regex validation (exit code: {result.returncode})")
+                        elif success_json:
+                            self.logger.error(f"✗ Step '{step_name}' failed JSON validation (exit code: {result.returncode})")
+                        else:
+                            self.logger.error(f"✗ Step '{step_name}' failed with exit code {result.returncode}")
+                        
+                        if attempt < max_retries:
+                            self.logger.info(f"Will retry in {retry_delay} second{'s' if retry_delay != 1 else ''}...")
+                    
+                    if attempt >= max_retries:
+                        if self.logger:
+                            self.logger.error(f"Step '{step_name}' failed after {max_retries} retries")
+                        return result.returncode if result.returncode != 0 else 1, memory
+                
+            except subprocess.TimeoutExpired:
+                timeout_duration = timeout if timeout is not None else 300
+                if not self.quiet:
+                    print(f"✗ Step '{step_name}' timed out after {timeout_duration} seconds", file=sys.stderr)
+                    if attempt < max_retries:
+                        print(f"Will retry in {retry_delay} second{'s' if retry_delay != 1 else ''}...")
+                if self.logger:
+                    self.logger.error(f"✗ Step '{step_name}' timed out after {timeout_duration} seconds")
+                    if attempt < max_retries:
+                        self.logger.info(f"Will retry in {retry_delay} second{'s' if retry_delay != 1 else ''}...")
+                if attempt >= max_retries:
+                    if self.logger:
+                        self.logger.error(f"Step '{step_name}' timed out after {max_retries} retries")
+                    return 124, memory  # Standard timeout exit code
+            except Exception as e:
+                if not self.quiet:
+                    print(f"✗ Step '{step_name}' failed with error: {e}", file=sys.stderr)
+                    if attempt < max_retries:
+                        print(f"Will retry in {retry_delay} second{'s' if retry_delay != 1 else ''}...")
+                if self.logger:
+                    self.logger.error(f"✗ Step '{step_name}' failed with error: {e}")
+                    if attempt < max_retries:
+                        self.logger.info(f"Will retry in {retry_delay} second{'s' if retry_delay != 1 else ''}...")
+                if attempt >= max_retries:
+                    if self.logger:
+                        self.logger.error(f"Step '{step_name}' failed with exception after {max_retries} retries")
+                    return 1, memory
+            
+            attempt += 1
+        
+        return 1, memory  # Should not reach here, but return failure if we do
+    
+    def _validate_success(self, exit_code: int, output: str, success_regex: str = None, success_json: str = None) -> bool:
+        """Validate if the step was successful.
+        
+        Args:
+            exit_code: Command exit code
+            output: Combined stdout and stderr output
+            success_regex: Optional regex pattern to match against output
+            success_json: Optional JSON path to check for existence in parsed output
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        # If JSON path is specified, try JSON validation
+        if success_json:
+            try:
+                parsed_output = json.loads(output.strip())
+                # Check if the JSON path exists
+                value = self._get_nested_value(parsed_output, success_json)
+                return value is not None
+            except json.JSONDecodeError as e:
+                if not self.quiet:
+                    print(f"JSON parsing failed for success validation: {e}", file=sys.stderr)
+                return False
+            except Exception as e:
+                if not self.quiet:
+                    print(f"JSON path validation failed: {e}", file=sys.stderr)
+                return False
+        
+        # If regex pattern is specified, use regex validation
+        if success_regex:
+            try:
+                pattern = re.compile(success_regex, re.MULTILINE | re.DOTALL)
+                match = pattern.search(output)
+                return match is not None
+            except re.error as e:
+                print(f"Invalid regex pattern: {e}", file=sys.stderr)
+                # Fallback to exit code validation
+                return exit_code == 0
+        
+        # If no validation pattern specified, use exit code only
+        return exit_code == 0
+    
+    def _substitute_variables(self, command: str, memory: Dict[str, Any]) -> str:
+        """Substitute {memory.key.path} variables in the command with actual values.
+        
+        Args:
+            command: Command string with optional {memory.key} patterns
+            memory: Memory dictionary for variable lookups
+            
+        Returns:
+            Command string with variables substituted
+            
+        Raises:
+            ValueError: If a referenced memory key is not found
+        """
+        if not memory:
+            return command
+        
+        # Find all {memory.key.path} patterns
+        pattern = r'\{memory\.([^}]+)\}'
+        matches = re.findall(pattern, command)
+        
+        result = command
+        for match in matches:
+            key_path = match
+            value = self._get_nested_value(memory, key_path)
+            
+            if value is None:
+                raise ValueError(f"Memory key '{key_path}' not found")
+            
+            # Convert value to string
+            str_value = str(value)
+            result = result.replace(f'{{memory.{key_path}}}', str_value)
+        
+        return result
+    
+    def _get_nested_value(self, data: Dict[str, Any], key_path: str) -> Any:
+        """Get nested value from dictionary using dot notation, supporting array indices.
+        
+        Args:
+            data: Dictionary to search in
+            key_path: Dot-separated key path (e.g., 'person.name', 'items.0', 'data.users.0.name')
+            
+        Returns:
+            Value at the specified path, or None if not found
+        """
+        keys = key_path.split('.')
+        current = data
+        
+        for key in keys:
+            if isinstance(current, dict) and key in current:
+                current = current[key]
+            elif isinstance(current, list):
+                # Handle array indices
+                try:
+                    index = int(key)
+                    if 0 <= index < len(current):
+                        current = current[index]
+                    else:
+                        return None
+                except ValueError:
+                    return None
+            else:
+                return None
+        
+        return current
+    
+    def get_step_count(self) -> int:
+        """Get the number of steps executed."""
+        return self.step_count
+    
+    def _extract_memory_updates(self, memory: Dict[str, Any], output: str, memory_update_config: List[Dict[str, Any]], step_name: str) -> Dict[str, Any]:
+        """Extract values from command output and update memory using array of regex/json and variable pairs.
+        
+        Args:
+            memory: Current memory state
+            output: Command output (stdout + stderr)
+            memory_update_config: Array of memory update configurations with regex/json and variable fields
+            step_name: Name of the step (for error reporting)
+            
+        Returns:
+            Updated memory dictionary
+        """
+        if not memory_update_config:
+            return memory
+        
+        # Create a copy of memory to modify
+        updated_memory = memory.copy()
+        
+        # Process each memory update configuration
+        for update_config in memory_update_config:
+            try:
+                regex_pattern = update_config.get('regex')
+                json_path = update_config.get('json')
+                variable_path = update_config.get('variable', '')
+                
+                if not variable_path:
+                    if not self.quiet:
+                        print(f"Warning: Invalid memory update config - missing variable")
+                    continue
+                
+                if not regex_pattern and not json_path:
+                    if not self.quiet:
+                        print(f"Warning: Invalid memory update config - missing regex or json field")
+                    continue
+                
+                # Remove "memory." prefix from variable path for internal processing
+                memory_path = variable_path.replace('memory.', '', 1)
+                extracted_value = None
+                
+                # Handle JSON path extraction
+                if json_path:
+                    try:
+                        parsed_output = json.loads(output.strip())
+                        extracted_value = self._get_nested_value(parsed_output, json_path)
+                        if extracted_value is not None:
+                            # Set the value in memory using dot notation
+                            self._set_nested_value(updated_memory, memory_path, extracted_value)
+                            if not self.quiet:
+                                print(f"Memory update (JSON): {memory_path} = {extracted_value}")
+                            if self.logger:
+                                self.logger.info(f"Memory update (JSON): {memory_path} = {extracted_value}")
+                        else:
+                            if not self.quiet:
+                                print(f"Warning: JSON path '{json_path}' not found in output for step '{step_name}'")
+                    except json.JSONDecodeError as e:
+                        if not self.quiet:
+                            print(f"Warning: JSON parsing failed for memory update in step '{step_name}': {e}")
+                        continue
+                
+                # Handle regex extraction (if no JSON path specified)
+                elif regex_pattern:
+                    # Apply regex pattern with multiline and dotall flags
+                    regex = re.compile(regex_pattern, re.MULTILINE | re.DOTALL)
+                    match = regex.search(output)
+                    
+                    if not match:
+                        if not self.quiet:
+                            print(f"Warning: Memory update regex '{regex_pattern}' did not match output for step '{step_name}'")
+                        continue
+                    
+                    # Extract value from first capture group
+                    if len(match.groups()) > 0:
+                        extracted_value = match.group(1)
+                        if extracted_value is not None:
+                            # Set the value in memory using dot notation
+                            self._set_nested_value(updated_memory, memory_path, extracted_value)
+                            if not self.quiet:
+                                print(f"Memory update (regex): {memory_path} = {extracted_value}")
+                            if self.logger:
+                                self.logger.info(f"Memory update (regex): {memory_path} = {extracted_value}")
+                        else:
+                            if not self.quiet:
+                                print(f"Warning: First capture group is None for memory path '{memory_path}'")
+                    else:
+                        if not self.quiet:
+                            print(f"Warning: No capture groups found in regex '{regex_pattern}' for memory path '{memory_path}'")
+                        
+            except re.error as e:
+                if not self.quiet:
+                    print(f"Warning: Invalid memory update regex pattern '{regex_pattern}': {e}")
+                continue
+            except Exception as e:
+                if not self.quiet:
+                    print(f"Warning: Failed to extract memory update for '{variable_path}': {e}")
+                continue
+        
+        return updated_memory
+    
+    def _set_nested_value(self, data: Dict[str, Any], key_path: str, value: Any) -> None:
+        """Set nested value in dictionary using dot notation.
+        
+        Args:
+            data: Dictionary to modify
+            key_path: Dot-separated key path (e.g., 'person.name')
+            value: Value to set
+        """
+        keys = key_path.split('.')
+        current = data
+        
+        # Navigate to the parent of the target key
+        for key in keys[:-1]:
+            if key not in current:
+                current[key] = {}
+            elif not isinstance(current[key], dict):
+                # If we encounter a non-dict value, replace it with a dict
+                current[key] = {}
+            current = current[key]
+        
+        # Set the final value
+        final_key = keys[-1]
+        current[final_key] = value
