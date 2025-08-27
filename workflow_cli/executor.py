@@ -21,14 +21,17 @@ class StepExecutor:
         self.workflow_id = workflow_id
         self.logger = logger
         
-    def execute_step(self, step_name: str, command: str, memory: Dict[str, Any], success_config: Dict[str, Any] = None, memory_update_config: Dict[str, Any] = None, step_index: int = 1, delay: float = 0, retry_delay: float = 1, max_retries: int = 0, timeout: Optional[float] = None) -> Tuple[int, Dict[str, Any]]:
+    def execute_step(self, step_name: str, step_type: str, command: str, workflow_file: str, memory_input: Dict[str, Any], memory: Dict[str, Any], success_config: Dict[str, Any] = None, memory_update_config: Dict[str, Any] = None, step_index: int = 1, delay: float = 0, retry_delay: float = 1, max_retries: int = 0, timeout: Optional[float] = None) -> Tuple[int, Dict[str, Any]]:
         """Execute a single workflow step with retry and success validation.
         
         Args:
             step_name: Name of the step being executed
-            command: Command line to execute with optional {memory.key} substitutions
+            step_type: Type of step ('command' or 'workflow_call')
+            command: Command line to execute (for command steps)
+            workflow_file: Path to workflow file to execute (for workflow_call steps)
+            memory_input: Memory input for workflow calls
             memory: Workflow memory/state for variable substitution
-            success_config: Success validation configuration with regex and json patterns
+            success_config: Success validation configuration with regex, json patterns, and value matching
             memory_update_config: Memory update configuration with pattern and capture_groups
             step_index: Index of the current step (1-based)
             delay: Delay in seconds before executing this step
@@ -44,6 +47,7 @@ class StepExecutor:
         memory_update_config = memory_update_config or {}
         success_regex = success_config.get('regex')
         success_json = success_config.get('json')
+        success_value = success_config.get('value')
         
         # Apply delay before step execution
         if delay > 0:
@@ -53,6 +57,14 @@ class StepExecutor:
                 self.logger.info(f"Waiting {delay} seconds before execution...")
             time.sleep(delay)
         
+        # Branch execution based on step type
+        if step_type == 'workflow_call':
+            return self._execute_workflow_call(
+                step_name, workflow_file, memory_input, memory, success_config, 
+                memory_update_config, retry_delay, max_retries
+            )
+        
+        # Handle command steps (existing logic)
         # Perform variable substitution on the command
         try:
             processed_command = self._substitute_variables(command, memory)
@@ -108,7 +120,7 @@ class StepExecutor:
                     full_output += result.stderr
                 
                 # Determine success based on regex/JSON validation or exit code
-                success = self._validate_success(result.returncode, full_output, success_regex, success_json)
+                success = self._validate_success(result.returncode, full_output, success_regex, success_json, success_value)
                 
                 if success:
                     # Extract memory updates from output if configured
@@ -187,7 +199,7 @@ class StepExecutor:
         
         return 1, memory  # Should not reach here, but return failure if we do
     
-    def _validate_success(self, exit_code: int, output: str, success_regex: str = None, success_json: str = None) -> bool:
+    def _validate_success(self, exit_code: int, output: str, success_regex: str = None, success_json: str = None, success_value: Any = None) -> bool:
         """Validate if the step was successful.
         
         Args:
@@ -195,6 +207,7 @@ class StepExecutor:
             output: Combined stdout and stderr output
             success_regex: Optional regex pattern to match against output
             success_json: Optional JSON path to check for existence in parsed output
+            success_value: Optional expected value at the JSON path
             
         Returns:
             True if successful, False otherwise
@@ -203,9 +216,15 @@ class StepExecutor:
         if success_json:
             try:
                 parsed_output = json.loads(output.strip())
-                # Check if the JSON path exists
+                # Get the value at the JSON path
                 value = self._get_nested_value(parsed_output, success_json)
-                return value is not None
+                
+                # If success_value is specified, check for exact match
+                if success_value is not None:
+                    return value == success_value
+                else:
+                    # Default behavior: check if the path exists (value is not None)
+                    return value is not None
             except json.JSONDecodeError as e:
                 if not self.quiet:
                     print(f"JSON parsing failed for success validation: {e}", file=sys.stderr)
@@ -293,6 +312,175 @@ class StepExecutor:
                 return None
         
         return current
+    
+    def _execute_workflow_call(self, step_name: str, workflow_file: str, memory_input: Dict[str, Any], memory: Dict[str, Any], success_config: Dict[str, Any], memory_update_config: List[Dict[str, Any]], retry_delay: float, max_retries: int) -> Tuple[int, Dict[str, Any]]:
+        """Execute a workflow call step with retry support.
+        
+        Args:
+            step_name: Name of the step
+            workflow_file: Path to the workflow JSON file to execute
+            memory_input: Memory values to pass to the called workflow
+            memory: Current workflow memory for variable substitution
+            success_config: Success validation configuration
+            memory_update_config: Memory update configuration
+            retry_delay: Delay between retry attempts
+            max_retries: Maximum number of retries
+            
+        Returns:
+            Tuple of (exit_code, updated_memory)
+        """
+        # Import WorkflowRunner here to avoid circular imports
+        from .workflow import WorkflowRunner
+        from pathlib import Path
+        
+        # Perform variable substitution on workflow_file path
+        try:
+            processed_workflow_file = self._substitute_variables(workflow_file, memory)
+        except Exception as e:
+            if not self.quiet:
+                print(f"✗ Variable substitution failed for workflow file path: {e}", file=sys.stderr)
+            if self.logger:
+                self.logger.error(f"Variable substitution failed for workflow file path: {e}")
+            return 1, memory
+        
+        # Perform variable substitution on memory_input values
+        try:
+            processed_memory_input = {}
+            for key, value in memory_input.items():
+                if isinstance(value, str):
+                    processed_memory_input[key] = self._substitute_variables(value, memory)
+                else:
+                    processed_memory_input[key] = value
+        except Exception as e:
+            if not self.quiet:
+                print(f"✗ Variable substitution failed for memory input: {e}", file=sys.stderr)
+            if self.logger:
+                self.logger.error(f"Variable substitution failed for memory input: {e}")
+            return 1, memory
+        
+        attempt = 0
+        while attempt <= max_retries:
+            if attempt > 0:
+                if not self.quiet:
+                    print(f"Retry attempt {attempt}/{max_retries}")
+                if self.logger:
+                    self.logger.info(f"Retry attempt {attempt}/{max_retries}")
+                time.sleep(retry_delay)
+            
+            try:
+                # Check if workflow file exists
+                workflow_path = Path(processed_workflow_file)
+                if not workflow_path.exists():
+                    if not workflow_path.is_absolute():
+                        # Try relative to current working directory
+                        import os
+                        workflow_path = Path(os.getcwd()) / processed_workflow_file
+                        if not workflow_path.exists():
+                            raise FileNotFoundError(f"Workflow file not found: {processed_workflow_file}")
+                
+                # Create sub-workflow runner with memory input
+                memory_input_json = json.dumps(processed_memory_input) if processed_memory_input else None
+                
+                # Capture the output of the sub-workflow
+                import io
+                import contextlib
+                
+                # Redirect stdout to capture the JSON result
+                captured_output = io.StringIO()
+                
+                sub_runner = WorkflowRunner(
+                    workflow_path=workflow_path,
+                    memory_input=memory_input_json,
+                    quiet=True,  # Sub-workflows run quietly to avoid cluttering output
+                    log_file=None  # Don't create separate log files for sub-workflows
+                )
+                
+                # Load and execute the sub-workflow
+                sub_runner.load_workflow()
+                if not self.quiet:
+                    print(f"Executing sub-workflow: {workflow_path.name}")
+                if self.logger:
+                    self.logger.info(f"Executing sub-workflow: {workflow_path.name}")
+                
+                # Execute with captured output
+                with contextlib.redirect_stdout(captured_output):
+                    exit_code = sub_runner.execute()
+                
+                # Parse the captured JSON output
+                workflow_output = captured_output.getvalue().strip()
+                
+                # If we didn't capture valid JSON, construct it from the final state
+                try:
+                    json.loads(workflow_output)  # Validate it's valid JSON
+                except (json.JSONDecodeError, ValueError):
+                    # Fallback: create JSON from final memory state
+                    final_memory = getattr(sub_runner, '_final_memory', {})
+                    workflow_output = json.dumps({
+                        "workflow_result": {
+                            "status": "success" if exit_code == 0 else "failed",
+                            "workflow_id": getattr(sub_runner, 'workflow_id', 'unknown'),
+                            "workflow_name": sub_runner.workflow_data.get('name', 'unknown') if sub_runner.workflow_data else 'unknown',
+                            "memory": final_memory
+                        }
+                    })
+                
+                # Validate success
+                success = self._validate_success(exit_code, workflow_output, 
+                                               success_config.get('regex'), 
+                                               success_config.get('json'), 
+                                               success_config.get('value'))
+                
+                if success:
+                    # Extract memory updates from workflow output
+                    updated_memory = self._extract_memory_updates(memory, workflow_output, memory_update_config, step_name)
+                    
+                    if not self.quiet:
+                        if self.workflow_id:
+                            print(f"✓ Step '{step_name}' (workflow call) completed successfully (workflow: {self.workflow_id})")
+                        else:
+                            print(f"✓ Step '{step_name}' (workflow call) completed successfully")
+                    
+                    if self.logger:
+                        self.logger.info(f"✓ Step '{step_name}' (workflow call) completed successfully (exit code: {exit_code})")
+                        if updated_memory != memory:
+                            self.logger.info(f"Memory updated after step '{step_name}'")
+                    
+                    return 0, updated_memory
+                else:
+                    if not self.quiet:
+                        print(f"✗ Step '{step_name}' (workflow call) failed validation (exit code: {exit_code})")
+                        if attempt < max_retries:
+                            print(f"Will retry in {retry_delay} second{'s' if retry_delay != 1 else ''}...")
+                    
+                    if self.logger:
+                        self.logger.error(f"✗ Step '{step_name}' (workflow call) failed validation (exit code: {exit_code})")
+                        if attempt < max_retries:
+                            self.logger.info(f"Will retry in {retry_delay} second{'s' if retry_delay != 1 else ''}...")
+                    
+                    if attempt >= max_retries:
+                        return exit_code if exit_code != 0 else 1, memory
+                
+            except FileNotFoundError as e:
+                if not self.quiet:
+                    print(f"✗ Step '{step_name}' failed: {e}", file=sys.stderr)
+                if self.logger:
+                    self.logger.error(f"✗ Step '{step_name}' failed: {e}")
+                return 1, memory
+            except Exception as e:
+                if not self.quiet:
+                    print(f"✗ Step '{step_name}' (workflow call) failed with error: {e}", file=sys.stderr)
+                    if attempt < max_retries:
+                        print(f"Will retry in {retry_delay} second{'s' if retry_delay != 1 else ''}...")
+                if self.logger:
+                    self.logger.error(f"✗ Step '{step_name}' (workflow call) failed with error: {e}")
+                    if attempt < max_retries:
+                        self.logger.info(f"Will retry in {retry_delay} second{'s' if retry_delay != 1 else ''}...")
+                if attempt >= max_retries:
+                    return 1, memory
+            
+            attempt += 1
+        
+        return 1, memory
     
     def get_step_count(self) -> int:
         """Get the number of steps executed."""

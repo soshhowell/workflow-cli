@@ -141,6 +141,15 @@ workflow -r test_retry_workflow.json
 - **Error handling**: Comprehensive error handling with user-friendly messages
 - **Logging**: Use print statements for user feedback, avoid excessive debug output
 
+### Version Management
+
+When updating version numbers, update all three locations:
+1. `pyproject.toml` - `version = "x.y.z"` in the `[project]` section
+2. `workflow_cli/__init__.py` - `__version__ = "x.y.z"`
+3. `workflow_cli/main.py` - `version=f"%(prog)s x.y.z"` in the argument parser
+
+After updating, reinstall with `pip install -e .` to see the changes.
+
 ### JSON Schema Evolution
 
 When modifying the workflow JSON structure:

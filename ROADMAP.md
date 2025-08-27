@@ -11,7 +11,7 @@ This document outlines planned features and enhancements for the Workflow CLI to
 
 ### Workflow Features
 - [ ] **Workflow Templates**: Create reusable workflow templates with parameter substitution
-- [ ] **Nested Workflows**: Support calling other workflows from within a workflow
+- [x] **Nested Workflows**: Support calling other workflows from within a workflow
 - [ ] **Workflow Validation**: Enhanced validation for workflow structure and dependencies
 
 ### CLI Improvements

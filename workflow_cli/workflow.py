@@ -44,15 +44,29 @@ class WorkflowRunner:
                 "type": "array",
                 "items": {
                     "type": "object",
-                    "required": ["name", "command"],
+                    "required": ["name"],
                     "properties": {
                         "name": {
                             "type": "string",
                             "description": "Name of the step"
                         },
+                        "type": {
+                            "type": "string",
+                            "enum": ["command", "workflow_call"],
+                            "default": "command",
+                            "description": "Type of step: 'command' for shell commands, 'workflow_call' for calling other workflows"
+                        },
                         "command": {
                             "type": "string",
-                            "description": "Command line to execute"
+                            "description": "Command line to execute (required for type: command)"
+                        },
+                        "workflow_file": {
+                            "type": "string",
+                            "description": "Path to workflow JSON file to execute (required for type: workflow_call)"
+                        },
+                        "memory_input": {
+                            "type": "object",
+                            "description": "Memory values to pass to the called workflow (for type: workflow_call)"
                         },
                         "max_retries": {
                             "type": "integer",
@@ -71,6 +85,15 @@ class WorkflowRunner:
                                 "json": {
                                     "type": "string",
                                     "description": "JSON path (e.g., 'home.city') to check for existence in JSON-parsed command output"
+                                },
+                                "value": {
+                                    "description": "Expected value at the JSON path for validation (any type: string, number, boolean, etc.)",
+                                    "oneOf": [
+                                        {"type": "string"},
+                                        {"type": "number"}, 
+                                        {"type": "boolean"},
+                                        {"type": "null"}
+                                    ]
                                 }
                             }
                         },
@@ -146,6 +169,7 @@ class WorkflowRunner:
         self.workflow_id = str(uuid.uuid4())
         self.logger = self._setup_logging()
         self.executor = StepExecutor(quiet=quiet, workflow_id=self.workflow_id, logger=self.logger)
+        self._final_memory = {}  # Store final memory state for workflow calls
         
     def load_workflow(self) -> Dict[str, Any]:
         """Load and validate workflow from JSON file."""
@@ -295,7 +319,10 @@ class WorkflowRunner:
         
         for i, step in enumerate(self.workflow_data['steps'], 1):
             step_name = step['name']
-            command = step['command']
+            step_type = step.get('type', 'command')  # Default to 'command' for backward compatibility
+            command = step.get('command', '')  # Not required for workflow_call steps
+            workflow_file = step.get('workflow_file', '')  # Only for workflow_call steps
+            memory_input = step.get('memory_input', {})  # Only for workflow_call steps
             success_config = step.get('success', {})
             memory_update_config = step.get('memory_update', {})
             delay = step.get('delay', 0)
@@ -305,7 +332,12 @@ class WorkflowRunner:
             
             if not self.quiet:
                 print(f"\n[{i}/{len(self.workflow_data['steps'])}] Executing step: {step_name}")
-                print(f"Command: {command}")
+                if step_type == 'workflow_call':
+                    print(f"Workflow file: {workflow_file}")
+                    if memory_input:
+                        print(f"Memory input: {len(memory_input)} variables")
+                else:
+                    print(f"Command: {command}")
                 
                 if delay > 0:
                     print(f"Delay before execution: {delay} seconds")
@@ -325,7 +357,12 @@ class WorkflowRunner:
             # Log step start
             if self.logger:
                 self.logger.info(f"[{i}/{len(self.workflow_data['steps'])}] Starting step: {step_name}")
-                self.logger.info(f"Command: {command}")
+                if step_type == 'workflow_call':
+                    self.logger.info(f"Workflow file: {workflow_file}")
+                    if memory_input:
+                        self.logger.info(f"Memory input: {len(memory_input)} variables")
+                else:
+                    self.logger.info(f"Command: {command}")
                 if delay > 0:
                     self.logger.info(f"Delay before execution: {delay} seconds")
                 if success_config.get('regex'):
@@ -342,11 +379,15 @@ class WorkflowRunner:
                     self.logger.info(f"Step timeout: {timeout} seconds")
             
             # Execute the step with success configuration, memory, memory update configuration, delay settings, and timeout
-            exit_code, updated_memory = self.executor.execute_step(step_name, command, memory, success_config, memory_update_config, i, delay, retry_delay, max_retries, timeout)
+            exit_code, updated_memory = self.executor.execute_step(
+                step_name, step_type, command, workflow_file, memory_input, memory, 
+                success_config, memory_update_config, i, delay, retry_delay, max_retries, timeout
+            )
             
             # Update memory for next steps
             if updated_memory:
                 memory = updated_memory
+                self._final_memory = memory  # Store for workflow calls
             
             if exit_code != 0:
                 failed_step = step_name
@@ -381,7 +422,8 @@ class WorkflowRunner:
             
             completed_steps += 1
         
-        # Output final JSON result on success
+        # Store final memory and output final JSON result on success
+        self._final_memory = memory
         result = {
             "workflow_result": {
                 "status": "success",
@@ -396,8 +438,10 @@ class WorkflowRunner:
         if not self.quiet:
             print(f"\n{'='*50}")
             print(f"Workflow '{self.workflow_data['name']}' completed successfully!")
-        
-        print(json.dumps(result, indent=2))
+            print(json.dumps(result, indent=2))
+        else:
+            # For quiet mode (like sub-workflows), still output the result but without extra formatting
+            print(json.dumps(result, indent=2))
         
         # Log successful completion
         if self.logger:
