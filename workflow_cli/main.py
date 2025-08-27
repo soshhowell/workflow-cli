@@ -13,38 +13,40 @@ def create_parser():
     """Create and configure argument parser."""
     parser = argparse.ArgumentParser(
         prog="workflow",
-        description="Execute workflows defined in JSON files",
+        description="Execute workflows defined in JSON files with {{memory.key}} variable substitution",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+Variable Substitution:
+  Use double brackets {{memory.key}} in commands to substitute memory variables.
+  Examples: {{memory.api_url}}, {{memory.user_id}}, {{memory.config.timeout}}
+
 Example workflow JSON format:
 {
     "name": "example_workflow",
     "memory": {
-        "variables": {},
-        "schema": {}
+        "variables": {"api_url": "https://api.example.com", "timeout": 30}
     },
     "steps": [
         {
-            "name": "list_files",
-            "command": "ls -la",
-            "max_retries": 2,
-            "success": {
-                "regex": "workflow_cli"
-            }
+            "name": "api_call",
+            "command": "curl -s {{memory.api_url}}/status",
+            "timeout": {{memory.timeout}},
+            "success": {"json": "status"},
+            "memory_update": [{"json": "response_time", "variable": "memory.response_ms"}]
         },
         {
-            "name": "show_date",
-            "command": "date"
+            "name": "report_status",
+            "command": "echo 'API responded in {{memory.response_ms}}ms'"
         }
     ]
 }
 
 Usage examples:
   workflow --help                              Show this help message
-  workflow -r workflow.json                    Run workflow from JSON file (quiet mode)
-  workflow --run my_workflow.json --verbose    Run workflow with detailed output
+  workflow -r workflow.json                    Run workflow (quiet mode)
+  workflow --run workflow.json --verbose       Run workflow with detailed output  
   workflow --sample-file example.json          Create sample workflow file
-  workflow -r workflow.json --memory '{"name": "John", "url": "https://api.example.com"}'
+  workflow -r workflow.json --memory '{"api_url": "https://myapi.com"}'
   workflow -r workflow.json --memory-file memory.json --verbose
         """
     )
@@ -58,13 +60,13 @@ Usage examples:
     parser.add_argument(
         "--memory",
         metavar="JSON",
-        help="Memory variables as JSON string (e.g., '{\"name\": \"value\"}')"
+        help="Memory variables as JSON string for {{memory.key}} substitution (e.g., '{\"name\": \"value\"}')"
     )
     
     parser.add_argument(
         "--memory-file",
         metavar="FILE",
-        help="Path to JSON file containing memory variables"
+        help="Path to JSON file containing memory variables for {{memory.key}} substitution"
     )
     
     parser.add_argument(
@@ -155,7 +157,7 @@ def create_sample_workflow(file_path: str) -> None:
                 },
                 {
                     "name": "show_project_info", 
-                    "command": "echo 'Project: {memory.project_name} by {memory.author} in {memory.current_dir}'"
+                    "command": "echo 'Project: {{memory.project_name}} by {{memory.author}} in {{memory.current_dir}}'"
                 }
             ]
         }

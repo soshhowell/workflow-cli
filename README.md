@@ -21,11 +21,11 @@ workflow --run workflow.json
 # Run workflow with detailed output
 workflow --run my_workflow.json --verbose
 
-# Run workflow with memory variables
-workflow -r workflow.json --memory '{"name": "John", "url": "https://api.example.com"}'
+# Run workflow with memory variables (overrides defaults)
+workflow -r example_workflow.json --memory '{"project_name": "my-project", "author": "John Doe", "max_items": 10}'
 
 # Run workflow with memory from file
-workflow -r workflow.json --memory-file memory.json --verbose
+workflow -r example_workflow.json --memory-file sample_memory.json --verbose
 
 # Create a sample workflow file
 workflow --sample-file example.json
@@ -80,7 +80,7 @@ A workflow JSON file must contain:
     "steps": [
         {
             "name": "show_project_info",
-            "command": "echo 'Working on project: {memory.project_name}'",
+            "command": "echo 'Working on project: {{memory.project_name}}'",
             "timeout": 10
         },
         {
@@ -97,7 +97,7 @@ A workflow JSON file must contain:
         },
         {
             "name": "final_report",
-            "command": "echo 'Project {memory.project_name} at commit {memory.commit_hash}'",
+            "command": "echo 'Project {{memory.project_name}} at commit {{memory.commit_hash}}'",
             "delay": 1.0
         }
     ]
@@ -123,7 +123,7 @@ A workflow JSON file must contain:
     "steps": [
         {
             "name": "check_api_health",
-            "command": "curl -s {memory.api_url}/health",
+            "command": "curl -s {{memory.api_url}}/health",
             "timeout": 30,
             "max_retries": 3,
             "retryDelay": 5,
@@ -140,7 +140,7 @@ A workflow JSON file must contain:
         },
         {
             "name": "validate_health",
-            "command": "echo 'API Status: {memory.health_status} (Response: {memory.response_time}ms)'",
+            "command": "echo 'API Status: {{memory.health_status}} (Response: {{memory.response_time}}ms)'"
             "success": {
                 "regex": "API Status: healthy"
             }
@@ -149,12 +149,62 @@ A workflow JSON file must contain:
 }
 ```
 
+## Variable Substitution
+
+Commands can reference memory variables using double-bracket syntax: `{{memory.key}}`. The workflow engine will replace these with actual values at execution time.
+
+**Why Double Brackets?**
+- **Clear distinction**: Makes it obvious this is a template variable, not shell syntax
+- **Avoid conflicts**: Single braces could conflict with shell brace expansion `{a,b,c}` or JSON syntax
+- **Standard convention**: Similar to template engines like Jinja2, Mustache, Handlebars
+
+**Examples:**
+- `{{memory.api_url}}` → `https://api.example.com`
+- `{{memory.user_id}}` → `12345`
+- `{{memory.config.timeout}}` → `30` (nested keys with dot notation)
+
+**Supported in:**
+- Step commands
+- Any string field where variable substitution makes sense
+
+If a referenced memory key doesn't exist, the workflow will fail with a clear error message.
+
+## Input Memory
+
+You can override or supplement the default memory variables in three ways:
+
+### 1. JSON String Input
+```bash
+workflow -r example_workflow.json --memory '{"project_name": "my-custom-project", "author": "Jane Developer", "max_items": 15}'
+```
+
+### 2. Memory File Input
+```bash
+# Create a memory file
+echo '{"project_name": "production-app", "environment": "production", "max_items": 20}' > my_memory.json
+
+# Use the memory file
+workflow -r example_workflow.json --memory-file my_memory.json
+```
+
+### 3. Combined Input (JSON string overrides file)
+```bash
+workflow -r example_workflow.json --memory-file defaults.json --memory '{"environment": "staging"}'
+```
+
+**Memory Priority (highest to lowest):**
+1. CLI `--memory` JSON string
+2. CLI `--memory-file` file contents  
+3. Workflow `memory.variables` defaults
+
+**Schema Validation:** If the workflow defines a `memory.schema`, all input will be validated against it.
+
 ### Step Format
 
 Each step in the `steps` array must contain:
 
 - `name`: A descriptive name for the step
-- `command`: The shell command to execute with optional `{memory.key}` substitutions
+- `command`: The shell command to execute with optional `{{memory.key}}` variable substitutions
 
 Optional step properties:
 - `max_retries`: Maximum retry attempts (default: 0)
@@ -175,7 +225,7 @@ Optional step properties:
 - ✅ Command output capture and display
 - ✅ Error handling and reporting with exit codes
 - ✅ Configurable step timeouts (default: 300 seconds)
-- ✅ Advanced memory/state management with variable substitution
+- ✅ Advanced memory/state management with `{{memory.key}}` variable substitution
 - ✅ Multiple success validation methods (regex patterns and JSON paths)
 - ✅ Configurable retry mechanism with custom delays
 - ✅ Memory extraction from command output (regex and JSON)

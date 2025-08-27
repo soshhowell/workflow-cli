@@ -242,11 +242,11 @@ class StepExecutor:
         Raises:
             ValueError: If a referenced memory key is not found
         """
-        if not memory:
-            return command
+        # Don't return early if memory is empty - we still need to check for variable patterns
+        # If there are {{memory.key}} patterns but no memory, that should be an error
         
-        # Find all {memory.key.path} patterns
-        pattern = r'\{memory\.([^}]+)\}'
+        # Find all {{memory.key.path}} patterns
+        pattern = r'\{\{memory\.([^}]+)\}\}'
         matches = re.findall(pattern, command)
         
         result = command
@@ -259,7 +259,7 @@ class StepExecutor:
             
             # Convert value to string
             str_value = str(value)
-            result = result.replace(f'{{memory.{key_path}}}', str_value)
+            result = result.replace(f'{{{{memory.{key_path}}}}}', str_value)
         
         return result
     
