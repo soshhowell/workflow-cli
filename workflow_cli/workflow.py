@@ -297,13 +297,14 @@ class WorkflowRunner:
         # Initialize memory from workflow and user input
         memory = self._initialize_memory()
         
+        # In verbose mode, we output JSON only. Status messages go to logs.
+        # In regular (quiet) mode, we output nothing.
         if not self.quiet:
-            print(f"Starting workflow: {self.workflow_data['name']}")
-            print(f"Workflow ID: {self.workflow_id}")
-            print(f"Steps to execute: {len(self.workflow_data['steps'])}")
-            if memory:
-                print(f"Memory initialized with {len(memory)} variables")
-            print("-" * 50)
+            # Verbose mode: output step JSON as we go, no status messages to stdout
+            pass
+        else:
+            # Quiet mode: no output to stdout at all
+            pass
         
         # Log workflow start
         if self.logger:
@@ -330,29 +331,40 @@ class WorkflowRunner:
             max_retries = step.get('max_retries', 0)
             timeout = step.get('timeout', None)  # No default timeout
             
+            # In verbose mode, output step JSON
             if not self.quiet:
-                print(f"\n[{i}/{len(self.workflow_data['steps'])}] Executing step: {step_name}")
+                step_json = {
+                    "step": {
+                        "index": i,
+                        "total": len(self.workflow_data['steps']),
+                        "name": step_name,
+                        "type": step_type,
+                        "status": "starting"
+                    }
+                }
                 if step_type == 'workflow_call':
-                    print(f"Workflow file: {workflow_file}")
+                    step_json["step"]["workflow_file"] = workflow_file
                     if memory_input:
-                        print(f"Memory input: {len(memory_input)} variables")
+                        step_json["step"]["memory_input_count"] = len(memory_input)
                 else:
-                    print(f"Command: {command}")
+                    step_json["step"]["command"] = command
                 
                 if delay > 0:
-                    print(f"Delay before execution: {delay} seconds")
+                    step_json["step"]["delay"] = delay
                 if success_config.get('regex'):
-                    print(f"Success validation: Using regex pattern")
+                    step_json["step"]["success_validation"] = "regex"
                 if success_config.get('json'):
-                    print(f"Success validation: Using JSON path '{success_config['json']}'")
+                    step_json["step"]["success_validation"] = "json_path"
+                    step_json["step"]["success_json_path"] = success_config['json']
                 if max_retries > 0:
-                    print(f"Max retries: {max_retries}")
+                    step_json["step"]["max_retries"] = max_retries
                     if retry_delay != 1:
-                        print(f"Retry delay: {retry_delay} seconds")
+                        step_json["step"]["retry_delay"] = retry_delay
                 if memory_update_config:
-                    print(f"Memory update: Will extract {len(memory_update_config)} values")
+                    step_json["step"]["memory_update_count"] = len(memory_update_config)
                 if timeout:
-                    print(f"Step timeout: {timeout} seconds")
+                    step_json["step"]["timeout"] = timeout
+                print(json.dumps(step_json, indent=2))
             
             # Log step start
             if self.logger:
@@ -391,8 +403,7 @@ class WorkflowRunner:
             
             if exit_code != 0:
                 failed_step = step_name
-                if not self.quiet:
-                    print(f"\nWorkflow failed at step '{step_name}' with exit code {exit_code}")
+                # No status messages in verbose mode - just log if available
                 
                 # Log failure
                 if self.logger:
@@ -435,13 +446,8 @@ class WorkflowRunner:
             }
         }
         
-        if not self.quiet:
-            print(f"\n{'='*50}")
-            print(f"Workflow '{self.workflow_data['name']}' completed successfully!")
-            print(json.dumps(result, indent=2))
-        else:
-            # For quiet mode (like sub-workflows), still output the result but without extra formatting
-            print(json.dumps(result, indent=2))
+        # Always output the final JSON result (both verbose and quiet modes)
+        print(json.dumps(result, indent=2))
         
         # Log successful completion
         if self.logger:

@@ -69,13 +69,11 @@ class StepExecutor:
         try:
             processed_command = self._substitute_variables(command, memory)
             if processed_command != command:
-                if not self.quiet:
-                    print(f"Command after substitution: {processed_command}")
+                # Status messages only go to logs in verbose mode
                 if self.logger:
                     self.logger.info(f"Command after substitution: {processed_command}")
         except Exception as e:
-            if not self.quiet:
-                print(f"✗ Variable substitution failed: {e}", file=sys.stderr)
+            # Status messages only go to logs in verbose mode
             if self.logger:
                 self.logger.error(f"Variable substitution failed: {e}")
             return 1, memory
@@ -83,8 +81,7 @@ class StepExecutor:
         attempt = 0
         while attempt <= max_retries:
             if attempt > 0:
-                if not self.quiet:
-                    print(f"Retry attempt {attempt}/{max_retries}")
+                # Status messages only go to logs in verbose mode
                 if self.logger:
                     self.logger.info(f"Retry attempt {attempt}/{max_retries}")
                 time.sleep(retry_delay)
@@ -99,21 +96,17 @@ class StepExecutor:
                     timeout=timeout if timeout is not None else 300  # Use step timeout or default to 5 minutes
                 )
                 
-                # Print and log output
+                # Capture output and log it
                 full_output = ""
                 if result.stdout:
-                    if not self.quiet:
-                        print("Output:")
-                        print(result.stdout.rstrip())
+                    # Status messages only go to logs in verbose mode
                     if self.logger:
                         self.logger.info("Command stdout:")
                         self.logger.info(result.stdout.rstrip())
                     full_output += result.stdout
                 
                 if result.stderr:
-                    if not self.quiet:
-                        print("Error output:")
-                        print(result.stderr.rstrip(), file=sys.stderr)
+                    # Status messages only go to logs in verbose mode
                     if self.logger:
                         self.logger.info("Command stderr:")
                         self.logger.info(result.stderr.rstrip())
@@ -126,11 +119,19 @@ class StepExecutor:
                     # Extract memory updates from output if configured
                     updated_memory = self._extract_memory_updates(memory, full_output, memory_update_config, step_name)
                     
+                    # In verbose mode, output step completion JSON
                     if not self.quiet:
-                        if self.workflow_id:
-                            print(f"✓ Step '{step_name}' completed successfully (workflow: {self.workflow_id})")
-                        else:
-                            print(f"✓ Step '{step_name}' completed successfully")
+                        step_result = {
+                            "step": {
+                                "name": step_name,
+                                "status": "completed",
+                                "exit_code": result.returncode,
+                                "workflow_id": self.workflow_id if self.workflow_id else None
+                            }
+                        }
+                        if updated_memory != memory:
+                            step_result["step"]["memory_updated"] = True
+                        print(json.dumps(step_result, indent=2))
                     
                     if self.logger:
                         self.logger.info(f"✓ Step '{step_name}' completed successfully (exit code: {result.returncode})")
@@ -139,17 +140,19 @@ class StepExecutor:
                     
                     return 0, updated_memory
                 else:
+                    # In verbose mode, output step failure JSON
                     if not self.quiet:
-                        if success_regex:
-                            print(f"✗ Step '{step_name}' failed regex validation (exit code: {result.returncode})")
-                        elif success_json:
-                            print(f"✗ Step '{step_name}' failed JSON validation (exit code: {result.returncode})")
-                        else:
-                            print(f"✗ Step '{step_name}' failed with exit code {result.returncode}")
-                        
-                        # If we have more retries available, continue the loop
+                        step_result = {
+                            "step": {
+                                "name": step_name,
+                                "status": "failed",
+                                "exit_code": result.returncode,
+                                "validation_type": "regex" if success_regex else ("json" if success_json else "exit_code")
+                            }
+                        }
                         if attempt < max_retries:
-                            print(f"Will retry in {retry_delay} second{'s' if retry_delay != 1 else ''}...")
+                            step_result["step"]["retry_in_seconds"] = retry_delay
+                        print(json.dumps(step_result, indent=2))
                     
                     if self.logger:
                         if success_regex:
@@ -169,10 +172,19 @@ class StepExecutor:
                 
             except subprocess.TimeoutExpired:
                 timeout_duration = timeout if timeout is not None else 300
+                # In verbose mode, output timeout JSON
                 if not self.quiet:
-                    print(f"✗ Step '{step_name}' timed out after {timeout_duration} seconds", file=sys.stderr)
+                    step_result = {
+                        "step": {
+                            "name": step_name,
+                            "status": "timeout",
+                            "timeout_seconds": timeout_duration
+                        }
+                    }
                     if attempt < max_retries:
-                        print(f"Will retry in {retry_delay} second{'s' if retry_delay != 1 else ''}...")
+                        step_result["step"]["retry_in_seconds"] = retry_delay
+                    print(json.dumps(step_result, indent=2))
+                    
                 if self.logger:
                     self.logger.error(f"✗ Step '{step_name}' timed out after {timeout_duration} seconds")
                     if attempt < max_retries:
@@ -182,10 +194,19 @@ class StepExecutor:
                         self.logger.error(f"Step '{step_name}' timed out after {max_retries} retries")
                     return 124, memory  # Standard timeout exit code
             except Exception as e:
+                # In verbose mode, output error JSON
                 if not self.quiet:
-                    print(f"✗ Step '{step_name}' failed with error: {e}", file=sys.stderr)
+                    step_result = {
+                        "step": {
+                            "name": step_name,
+                            "status": "error",
+                            "error": str(e)
+                        }
+                    }
                     if attempt < max_retries:
-                        print(f"Will retry in {retry_delay} second{'s' if retry_delay != 1 else ''}...")
+                        step_result["step"]["retry_in_seconds"] = retry_delay
+                    print(json.dumps(step_result, indent=2))
+                    
                 if self.logger:
                     self.logger.error(f"✗ Step '{step_name}' failed with error: {e}")
                     if attempt < max_retries:
@@ -226,12 +247,14 @@ class StepExecutor:
                     # Default behavior: check if the path exists (value is not None)
                     return value is not None
             except json.JSONDecodeError as e:
-                if not self.quiet:
-                    print(f"JSON parsing failed for success validation: {e}", file=sys.stderr)
+                # Status messages only go to logs in verbose mode
+                if self.logger:
+                    self.logger.warning(f"JSON parsing failed for success validation: {e}")
                 return False
             except Exception as e:
-                if not self.quiet:
-                    print(f"JSON path validation failed: {e}", file=sys.stderr)
+                # Status messages only go to logs in verbose mode
+                if self.logger:
+                    self.logger.warning(f"JSON path validation failed: {e}")
                 return False
         
         # If regex pattern is specified, use regex validation
@@ -337,8 +360,7 @@ class StepExecutor:
         try:
             processed_workflow_file = self._substitute_variables(workflow_file, memory)
         except Exception as e:
-            if not self.quiet:
-                print(f"✗ Variable substitution failed for workflow file path: {e}", file=sys.stderr)
+            # Status messages only go to logs in verbose mode
             if self.logger:
                 self.logger.error(f"Variable substitution failed for workflow file path: {e}")
             return 1, memory
@@ -352,8 +374,7 @@ class StepExecutor:
                 else:
                     processed_memory_input[key] = value
         except Exception as e:
-            if not self.quiet:
-                print(f"✗ Variable substitution failed for memory input: {e}", file=sys.stderr)
+            # Status messages only go to logs in verbose mode
             if self.logger:
                 self.logger.error(f"Variable substitution failed for memory input: {e}")
             return 1, memory
@@ -361,8 +382,7 @@ class StepExecutor:
         attempt = 0
         while attempt <= max_retries:
             if attempt > 0:
-                if not self.quiet:
-                    print(f"Retry attempt {attempt}/{max_retries}")
+                # Status messages only go to logs in verbose mode
                 if self.logger:
                     self.logger.info(f"Retry attempt {attempt}/{max_retries}")
                 time.sleep(retry_delay)
@@ -397,8 +417,7 @@ class StepExecutor:
                 
                 # Load and execute the sub-workflow
                 sub_runner.load_workflow()
-                if not self.quiet:
-                    print(f"Executing sub-workflow: {workflow_path.name}")
+                # Status messages only go to logs in verbose mode
                 if self.logger:
                     self.logger.info(f"Executing sub-workflow: {workflow_path.name}")
                 
@@ -434,11 +453,20 @@ class StepExecutor:
                     # Extract memory updates from workflow output
                     updated_memory = self._extract_memory_updates(memory, workflow_output, memory_update_config, step_name)
                     
+                    # In verbose mode, output step completion JSON
                     if not self.quiet:
-                        if self.workflow_id:
-                            print(f"✓ Step '{step_name}' (workflow call) completed successfully (workflow: {self.workflow_id})")
-                        else:
-                            print(f"✓ Step '{step_name}' (workflow call) completed successfully")
+                        step_result = {
+                            "step": {
+                                "name": step_name,
+                                "status": "completed",
+                                "type": "workflow_call",
+                                "exit_code": exit_code,
+                                "workflow_id": self.workflow_id if self.workflow_id else None
+                            }
+                        }
+                        if updated_memory != memory:
+                            step_result["step"]["memory_updated"] = True
+                        print(json.dumps(step_result, indent=2))
                     
                     if self.logger:
                         self.logger.info(f"✓ Step '{step_name}' (workflow call) completed successfully (exit code: {exit_code})")
@@ -447,10 +475,20 @@ class StepExecutor:
                     
                     return 0, updated_memory
                 else:
+                    # In verbose mode, output step failure JSON
                     if not self.quiet:
-                        print(f"✗ Step '{step_name}' (workflow call) failed validation (exit code: {exit_code})")
+                        step_result = {
+                            "step": {
+                                "name": step_name,
+                                "status": "failed",
+                                "type": "workflow_call",
+                                "exit_code": exit_code,
+                                "validation_failed": True
+                            }
+                        }
                         if attempt < max_retries:
-                            print(f"Will retry in {retry_delay} second{'s' if retry_delay != 1 else ''}...")
+                            step_result["step"]["retry_in_seconds"] = retry_delay
+                        print(json.dumps(step_result, indent=2))
                     
                     if self.logger:
                         self.logger.error(f"✗ Step '{step_name}' (workflow call) failed validation (exit code: {exit_code})")
@@ -461,16 +499,25 @@ class StepExecutor:
                         return exit_code if exit_code != 0 else 1, memory
                 
             except FileNotFoundError as e:
-                if not self.quiet:
-                    print(f"✗ Step '{step_name}' failed: {e}", file=sys.stderr)
+                # Status messages only go to logs in verbose mode
                 if self.logger:
                     self.logger.error(f"✗ Step '{step_name}' failed: {e}")
                 return 1, memory
             except Exception as e:
+                # In verbose mode, output error JSON
                 if not self.quiet:
-                    print(f"✗ Step '{step_name}' (workflow call) failed with error: {e}", file=sys.stderr)
+                    step_result = {
+                        "step": {
+                            "name": step_name,
+                            "status": "error",
+                            "type": "workflow_call",
+                            "error": str(e)
+                        }
+                    }
                     if attempt < max_retries:
-                        print(f"Will retry in {retry_delay} second{'s' if retry_delay != 1 else ''}...")
+                        step_result["step"]["retry_in_seconds"] = retry_delay
+                    print(json.dumps(step_result, indent=2))
+                    
                 if self.logger:
                     self.logger.error(f"✗ Step '{step_name}' (workflow call) failed with error: {e}")
                     if attempt < max_retries:
@@ -512,13 +559,15 @@ class StepExecutor:
                 variable_path = update_config.get('variable', '')
                 
                 if not variable_path:
-                    if not self.quiet:
-                        print(f"Warning: Invalid memory update config - missing variable")
+                    # Status messages only go to logs in verbose mode
+                    if self.logger:
+                        self.logger.warning(f"Invalid memory update config - missing variable")
                     continue
                 
                 if not regex_pattern and not json_path:
-                    if not self.quiet:
-                        print(f"Warning: Invalid memory update config - missing regex or json field")
+                    # Status messages only go to logs in verbose mode
+                    if self.logger:
+                        self.logger.warning(f"Invalid memory update config - missing regex or json field")
                     continue
                 
                 # Remove "memory." prefix from variable path for internal processing
@@ -533,16 +582,17 @@ class StepExecutor:
                         if extracted_value is not None:
                             # Set the value in memory using dot notation
                             self._set_nested_value(updated_memory, memory_path, extracted_value)
-                            if not self.quiet:
-                                print(f"Memory update (JSON): {memory_path} = {extracted_value}")
+                            # Status messages only go to logs in verbose mode
                             if self.logger:
                                 self.logger.info(f"Memory update (JSON): {memory_path} = {extracted_value}")
                         else:
-                            if not self.quiet:
-                                print(f"Warning: JSON path '{json_path}' not found in output for step '{step_name}'")
+                            # Status messages only go to logs in verbose mode
+                            if self.logger:
+                                self.logger.warning(f"JSON path '{json_path}' not found in output for step '{step_name}'")
                     except json.JSONDecodeError as e:
-                        if not self.quiet:
-                            print(f"Warning: JSON parsing failed for memory update in step '{step_name}': {e}")
+                        # Status messages only go to logs in verbose mode
+                        if self.logger:
+                            self.logger.warning(f"JSON parsing failed for memory update in step '{step_name}': {e}")
                         continue
                 
                 # Handle regex extraction (if no JSON path specified)
@@ -552,8 +602,9 @@ class StepExecutor:
                     match = regex.search(output)
                     
                     if not match:
-                        if not self.quiet:
-                            print(f"Warning: Memory update regex '{regex_pattern}' did not match output for step '{step_name}'")
+                        # Status messages only go to logs in verbose mode
+                        if self.logger:
+                            self.logger.warning(f"Memory update regex '{regex_pattern}' did not match output for step '{step_name}'")
                         continue
                     
                     # Extract value from first capture group
@@ -562,24 +613,27 @@ class StepExecutor:
                         if extracted_value is not None:
                             # Set the value in memory using dot notation
                             self._set_nested_value(updated_memory, memory_path, extracted_value)
-                            if not self.quiet:
-                                print(f"Memory update (regex): {memory_path} = {extracted_value}")
+                            # Status messages only go to logs in verbose mode
                             if self.logger:
                                 self.logger.info(f"Memory update (regex): {memory_path} = {extracted_value}")
                         else:
-                            if not self.quiet:
-                                print(f"Warning: First capture group is None for memory path '{memory_path}'")
+                            # Status messages only go to logs in verbose mode
+                            if self.logger:
+                                self.logger.warning(f"First capture group is None for memory path '{memory_path}'")
                     else:
-                        if not self.quiet:
-                            print(f"Warning: No capture groups found in regex '{regex_pattern}' for memory path '{memory_path}'")
+                        # Status messages only go to logs in verbose mode
+                        if self.logger:
+                            self.logger.warning(f"No capture groups found in regex '{regex_pattern}' for memory path '{memory_path}'")
                         
             except re.error as e:
-                if not self.quiet:
-                    print(f"Warning: Invalid memory update regex pattern '{regex_pattern}': {e}")
+                # Status messages only go to logs in verbose mode
+                if self.logger:
+                    self.logger.warning(f"Invalid memory update regex pattern '{regex_pattern}': {e}")
                 continue
             except Exception as e:
-                if not self.quiet:
-                    print(f"Warning: Failed to extract memory update for '{variable_path}': {e}")
+                # Status messages only go to logs in verbose mode
+                if self.logger:
+                    self.logger.warning(f"Failed to extract memory update for '{variable_path}': {e}")
                 continue
         
         return updated_memory

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "workflow-cli"
-version = "0.2.0"
+version = "0.2.1"
 description = "A CLI tool for executing defined workflows from JSON files"
 authors = [{name = "Workflow CLI Team"}]
 license = {text = "MIT"}

@@ -43,11 +43,11 @@ Example workflow JSON format:
 
 Usage examples:
   workflow --help                              Show this help message
-  workflow -r workflow.json                    Run workflow (quiet mode)
-  workflow --run workflow.json --verbose       Run workflow with detailed output  
+  workflow -r workflow.json                    Run workflow (quiet mode - final JSON only)
+  workflow --run workflow.json --verbose       Run workflow with JSON output mode
   workflow --sample-file example.json          Create sample workflow file
   workflow -r workflow.json --memory '{"api_url": "https://myapi.com"}'
-  workflow -r workflow.json --memory-file memory.json --verbose
+  workflow -r workflow.json --memory-file memory.json --verbose --log-file workflow.log
         """
     )
     
@@ -72,7 +72,7 @@ Usage examples:
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Enable detailed step output and progress information"
+        help="Enable JSON output mode: outputs step JSON during execution and final result JSON, with status messages sent to logs if configured"
     )
     
     parser.add_argument(
@@ -96,7 +96,7 @@ Usage examples:
     parser.add_argument(
         "--version",
         action="version",
-        version=f"%(prog)s 0.2.0"
+        version=f"%(prog)s 0.2.1"
     )
     
     return parser
