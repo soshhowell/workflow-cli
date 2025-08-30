@@ -51,8 +51,6 @@ class StepExecutor:
         
         # Apply delay before step execution
         if delay > 0:
-            if not self.quiet:
-                print(f"Waiting {delay} seconds before execution...")
             if self.logger:
                 self.logger.info(f"Waiting {delay} seconds before execution...")
             time.sleep(delay)

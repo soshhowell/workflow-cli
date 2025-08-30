@@ -96,7 +96,7 @@ Usage examples:
     parser.add_argument(
         "--version",
         action="version",
-        version=f"%(prog)s 0.2.1"
+        version=f"%(prog)s 0.2.2"
     )
     
     return parser
