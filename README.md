@@ -27,6 +27,9 @@ workflow -r example_workflow.json --memory '{"project_name": "my-project", "auth
 # Run workflow with memory from file
 workflow -r example_workflow.json --memory-file sample_memory.json --verbose
 
+# Start workflow execution from a specific step
+workflow -r workflow.json --start-from "step_name"
+
 # Create a sample workflow file
 workflow --sample-file example.json
 
@@ -40,7 +43,7 @@ workflow -r workflow.json --log-path ./logs/
 ```
 usage: workflow [-h] [-r FILE] [--memory JSON] [--memory-file FILE]
                 [--verbose] [--sample-file FILE] [--log-file FILE]
-                [--log-path DIR] [--version]
+                [--log-path DIR] [--start-from STEP_NAME] [--version]
 
 options:
   -h, --help           show this help message and exit
@@ -51,6 +54,7 @@ options:
   --sample-file FILE   Create a sample workflow JSON file at specified path
   --log-file FILE      Path to log file for writing all workflow outputs
   --log-path DIR       Directory path where logs will be saved as {workflow_id}.log
+  --start-from STEP_NAME  Start workflow execution from the specified step name, skipping all previous steps
   --version            show program's version number and exit
 ```
 
@@ -233,6 +237,7 @@ Optional step properties:
 - ✅ Comprehensive workflow logging to files
 - ✅ CLI memory injection via JSON strings or files
 - ✅ Verbose mode for detailed execution information
+- ✅ Start workflow execution from any step with `--start-from` for debugging and development
 
 ## Example Files
 
@@ -243,3 +248,30 @@ Run the comprehensive example:
 ```bash
 workflow -r example_workflow.json --verbose
 ```
+
+## Start From Step Feature
+
+The `--start-from` feature allows you to start workflow execution from any specific step, skipping all previous steps. This is particularly useful for:
+
+- **Debugging workflows**: Resume execution from where it failed
+- **Development iterations**: Skip time-consuming setup steps during development
+- **Testing specific parts**: Test individual workflow segments
+
+### Usage Examples
+
+```bash
+# Start from a specific step
+workflow -r example_workflow.json --start-from "check_date_time"
+
+# Start from a step with verbose output
+workflow -r workflow.json --start-from "deploy_step" --verbose
+
+# Combine with memory injection
+workflow -r workflow.json --start-from "final_step" --memory '{"env": "production"}'
+```
+
+### Important Notes
+
+- **Memory Dependencies**: When starting from a middle step, you won't have memory variables that were set by skipped steps
+- **Step Validation**: The CLI will validate that the specified step name exists and provide helpful error messages with available step names
+- **Initial Memory**: Steps can still use memory variables defined in the workflow's initial memory configuration

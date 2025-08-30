@@ -138,9 +138,15 @@ Usage examples:
     )
     
     parser.add_argument(
+        "--start-from",
+        metavar="STEP_NAME",
+        help="Start workflow execution from the specified step name, skipping all previous steps"
+    )
+    
+    parser.add_argument(
         "--version",
         action="version",
-        version=f"%(prog)s 0.3.0"
+        version=f"%(prog)s 0.4.0"
     )
     
     return parser
@@ -243,7 +249,8 @@ def main():
             memory_file=args.memory_file, 
             quiet=not args.verbose,
             log_file=args.log_file,
-            log_path=args.log_path
+            log_path=args.log_path,
+            start_from_step=args.start_from
         )
         return runner.execute()
     except Exception as e:

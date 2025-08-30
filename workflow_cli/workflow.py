@@ -157,7 +157,7 @@ class WorkflowRunner:
         }
     }
     
-    def __init__(self, workflow_path: Path, memory_input: Optional[str] = None, memory_file: Optional[str] = None, quiet: bool = False, log_file: Optional[str] = None, log_path: Optional[str] = None):
+    def __init__(self, workflow_path: Path, memory_input: Optional[str] = None, memory_file: Optional[str] = None, quiet: bool = False, log_file: Optional[str] = None, log_path: Optional[str] = None, start_from_step: Optional[str] = None):
         """Initialize with workflow file path and optional memory input."""
         self.workflow_path = workflow_path
         self.workflow_data = None
@@ -166,6 +166,7 @@ class WorkflowRunner:
         self.quiet = quiet
         self.log_file = log_file
         self.log_path = log_path
+        self.start_from_step = start_from_step
         self.workflow_id = str(uuid.uuid4())
         self.logger = self._setup_logging()
         self.executor = StepExecutor(quiet=quiet, workflow_id=self.workflow_id, logger=self.logger)
@@ -188,7 +189,24 @@ class WorkflowRunner:
             raise ValueError(f"Workflow validation failed: {e.message}")
         
         self.workflow_data = workflow_data
+        
+        # Validate start_from_step if provided
+        if self.start_from_step:
+            self._validate_start_from_step()
+        
         return workflow_data
+    
+    def _validate_start_from_step(self) -> None:
+        """Validate that the start_from_step exists in the workflow."""
+        if not self.workflow_data or 'steps' not in self.workflow_data:
+            return
+        
+        step_names = [step['name'] for step in self.workflow_data['steps']]
+        if self.start_from_step not in step_names:
+            raise ValueError(
+                f"Step '{self.start_from_step}' not found in workflow. "
+                f"Available steps: {', '.join(step_names)}"
+            )
     
     def _load_user_memory(self) -> Dict[str, Any]:
         """Load memory from CLI input or file."""
@@ -297,6 +315,14 @@ class WorkflowRunner:
         # Initialize memory from workflow and user input
         memory = self._initialize_memory()
         
+        # Determine starting step index
+        start_index = 0
+        if self.start_from_step:
+            for idx, step in enumerate(self.workflow_data['steps']):
+                if step['name'] == self.start_from_step:
+                    start_index = idx
+                    break
+        
         # In verbose mode, we output JSON only. Status messages go to logs.
         # In regular (quiet) mode, we output nothing.
         if not self.quiet:
@@ -309,16 +335,25 @@ class WorkflowRunner:
         # Log workflow start
         if self.logger:
             self.logger.info(f"Starting workflow: {self.workflow_data['name']}")
-            self.logger.info(f"Steps to execute: {len(self.workflow_data['steps'])}")
+            if self.start_from_step:
+                self.logger.info(f"Starting from step: '{self.start_from_step}' (skipping previous steps)")
+                if start_index > 0:
+                    self.logger.info(f"Skipping {start_index} steps before '{self.start_from_step}'")
+            self.logger.info(f"Steps to execute: {len(self.workflow_data['steps']) - start_index if self.start_from_step else len(self.workflow_data['steps'])}")
             if memory:
                 self.logger.info(f"Memory initialized with {len(memory)} variables: {list(memory.keys())}")
             self.logger.info("-" * 50)
         
-        # Execute steps sequentially
-        completed_steps = 0
+        # Execute steps sequentially  
+        completed_steps = start_index  # Count skipped steps as completed
         failed_step = None
         
         for i, step in enumerate(self.workflow_data['steps'], 1):
+            # Skip steps before start_from_step
+            if i - 1 < start_index:
+                if self.logger:
+                    self.logger.info(f"[{i}/{len(self.workflow_data['steps'])}] Skipping step: {step['name']} (starting from '{self.start_from_step}')")
+                continue
             step_name = step['name']
             step_type = step.get('type', 'command')  # Default to 'command' for backward compatibility
             command = step.get('command', '')  # Not required for workflow_call steps

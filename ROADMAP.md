@@ -19,6 +19,7 @@ This document outlines planned features and enhancements for the Workflow CLI to
 - [ ] **Dry Run Mode**: Preview workflow execution without running commands
 - [ ] **Verbose Logging**: Configurable logging levels and detailed execution logs
 - [ ] **Progress Indicators**: Visual progress bars and status indicators
+- [x] **Start From Step**: Execute workflow starting from a specific step name, skipping previous steps
 
 ### Output & Reporting
 - [ ] **Structured Output**: JSON/YAML output format for programmatic consumption
