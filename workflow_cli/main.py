@@ -18,25 +18,58 @@ def create_parser():
         epilog="""
 Variable Substitution:
   Use double brackets {{memory.key}} in commands to substitute memory variables.
-  Examples: {{memory.api_url}}, {{memory.user_id}}, {{memory.config.timeout}}
+  
+  Basic Usage:
+    {{memory.api_url}}        → Simple string/number/boolean values
+    {{memory.config.timeout}} → Nested object access with dot notation
+    {{memory.items.0.name}}   → Array access with numeric indices
+  
+  Object/Array Handling:
+    • Lists/Arrays    → Convert to space-separated strings (CLI-friendly)
+      {{memory.files}}     → "file1.txt file2.txt file3.txt"
+      {{memory.numbers}}   → "1 2 3 4 5"
+    
+    • Objects/Dicts  → Convert to JSON strings (parseable)
+      {{memory.config}}    → '{"timeout": 30, "retries": 3}'
+    
+    • Nested Access  → Access specific fields with dot notation
+      {{memory.user.name}} → "John Doe" (from nested object)
+      {{memory.items.0}}   → First item from array
+    
+    • Null/None      → Convert to empty string
+      {{memory.empty}}     → "" (empty)
 
 Example workflow JSON format:
 {
     "name": "example_workflow",
     "memory": {
-        "variables": {"api_url": "https://api.example.com", "timeout": 30}
+        "variables": {
+            "api_url": "https://api.example.com",
+            "timeout": 30,
+            "files": ["data.json", "config.yaml"],
+            "settings": {"retries": 3, "debug": true},
+            "servers": [
+                {"name": "web1", "port": 8080},
+                {"name": "web2", "port": 8081}
+            ]
+        }
     },
     "steps": [
         {
-            "name": "api_call",
-            "command": "curl -s {{memory.api_url}}/status",
-            "timeout": {{memory.timeout}},
-            "success": {"json": "status"},
-            "memory_update": [{"json": "response_time", "variable": "memory.response_ms"}]
+            "name": "process_files",
+            "command": "process {{memory.files}}",
+            "comment": "Expands to: process data.json config.yaml"
         },
         {
-            "name": "report_status",
-            "command": "echo 'API responded in {{memory.response_ms}}ms'"
+            "name": "api_call_with_config",
+            "command": "curl -d '{{memory.settings}}' {{memory.api_url}}/status",
+            "timeout": {{memory.timeout}},
+            "comment": "JSON config passed as data"
+        },
+        {
+            "name": "connect_to_first_server",
+            "command": "nc {{memory.servers.0.name}} {{memory.servers.0.port}}",
+            "comment": "Access nested array elements"
         }
     ]
 }
@@ -46,7 +79,18 @@ Usage examples:
   workflow -r workflow.json                    Run workflow (quiet mode - final JSON only)
   workflow --run workflow.json --verbose       Run workflow with JSON output mode
   workflow --sample-file example.json          Create sample workflow file
+  
+  # Simple memory variables
   workflow -r workflow.json --memory '{"api_url": "https://myapi.com"}'
+  
+  # Complex objects and arrays
+  workflow -r workflow.json --memory '{
+    "files": ["input1.txt", "input2.txt"],
+    "config": {"timeout": 60, "retries": 5},
+    "servers": [{"host": "server1.com", "port": 8080}]
+  }'
+  
+  # Memory from file with logging
   workflow -r workflow.json --memory-file memory.json --verbose --log-file workflow.log
         """
     )
@@ -96,7 +140,7 @@ Usage examples:
     parser.add_argument(
         "--version",
         action="version",
-        version=f"%(prog)s 0.2.2"
+        version=f"%(prog)s 0.3.0"
     )
     
     return parser

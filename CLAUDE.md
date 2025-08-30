@@ -242,3 +242,4 @@ workflow -r example_workflow.json
 - `workflow_cli/executor.py` - Step execution changes
 - `ROADMAP.md` - Feature tracking
 - `README.md` - User documentation
+- remember to run pip install . to test

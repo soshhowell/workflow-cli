@@ -292,16 +292,72 @@ class StepExecutor:
         result = command
         for match in matches:
             key_path = match
-            value = self._get_nested_value(memory, key_path)
+            value, found = self._get_nested_value_with_found(memory, key_path)
             
-            if value is None:
+            if not found:
                 raise ValueError(f"Memory key '{key_path}' not found")
             
-            # Convert value to string
-            str_value = str(value)
+            # Convert value to command-line compatible string
+            str_value = self._convert_to_cli_string(value)
             result = result.replace(f'{{{{memory.{key_path}}}}}', str_value)
         
         return result
+    
+    def _convert_to_cli_string(self, value: Any) -> str:
+        """Convert a value to a command-line compatible string representation.
+        
+        Args:
+            value: The value to convert (can be any type)
+            
+        Returns:
+            Command-line compatible string representation
+        """
+        if isinstance(value, str):
+            return value
+        elif isinstance(value, (int, float, bool)):
+            return str(value)
+        elif isinstance(value, list):
+            # Convert list to space-separated string of items
+            return ' '.join(self._convert_to_cli_string(item) for item in value)
+        elif isinstance(value, dict):
+            # Convert dict to JSON string for command-line use
+            return json.dumps(value)
+        elif value is None:
+            return ""
+        else:
+            # Fallback to string conversion for other types
+            return str(value)
+    
+    def _get_nested_value_with_found(self, data: Dict[str, Any], key_path: str) -> tuple[Any, bool]:
+        """Get nested value from dictionary using dot notation, supporting array indices.
+        
+        Args:
+            data: Dictionary to search in
+            key_path: Dot-separated key path (e.g., 'person.name', 'items.0', 'data.users.0.name')
+            
+        Returns:
+            Tuple of (value, found) where found indicates if the key path exists
+        """
+        keys = key_path.split('.')
+        current = data
+        
+        for key in keys:
+            if isinstance(current, dict) and key in current:
+                current = current[key]
+            elif isinstance(current, list):
+                # Handle array indices
+                try:
+                    index = int(key)
+                    if 0 <= index < len(current):
+                        current = current[index]
+                    else:
+                        return None, False
+                except ValueError:
+                    return None, False
+            else:
+                return None, False
+        
+        return current, True
     
     def _get_nested_value(self, data: Dict[str, Any], key_path: str) -> Any:
         """Get nested value from dictionary using dot notation, supporting array indices.
