@@ -124,7 +124,8 @@ class StepExecutor:
                                 "name": step_name,
                                 "status": "completed",
                                 "exit_code": result.returncode,
-                                "workflow_id": self.workflow_id if self.workflow_id else None
+                                "workflow_id": self.workflow_id if self.workflow_id else None,
+                                "memory": updated_memory
                             }
                         }
                         if updated_memory != memory:
@@ -145,7 +146,8 @@ class StepExecutor:
                                 "name": step_name,
                                 "status": "failed",
                                 "exit_code": result.returncode,
-                                "validation_type": "regex" if success_regex else ("json" if success_json else "exit_code")
+                                "validation_type": "regex" if success_regex else ("json" if success_json else "exit_code"),
+                                "memory": memory
                             }
                         }
                         if attempt < max_retries:
@@ -176,7 +178,8 @@ class StepExecutor:
                         "step": {
                             "name": step_name,
                             "status": "timeout",
-                            "timeout_seconds": timeout_duration
+                            "timeout_seconds": timeout_duration,
+                            "memory": memory
                         }
                     }
                     if attempt < max_retries:
@@ -198,7 +201,8 @@ class StepExecutor:
                         "step": {
                             "name": step_name,
                             "status": "error",
-                            "error": str(e)
+                            "error": str(e),
+                            "memory": memory
                         }
                     }
                     if attempt < max_retries:
@@ -515,7 +519,8 @@ class StepExecutor:
                                 "status": "completed",
                                 "type": "workflow_call",
                                 "exit_code": exit_code,
-                                "workflow_id": self.workflow_id if self.workflow_id else None
+                                "workflow_id": self.workflow_id if self.workflow_id else None,
+                                "memory": updated_memory
                             }
                         }
                         if updated_memory != memory:
@@ -537,7 +542,8 @@ class StepExecutor:
                                 "status": "failed",
                                 "type": "workflow_call",
                                 "exit_code": exit_code,
-                                "validation_failed": True
+                                "validation_failed": True,
+                                "memory": memory
                             }
                         }
                         if attempt < max_retries:
@@ -565,7 +571,8 @@ class StepExecutor:
                             "name": step_name,
                             "status": "error",
                             "type": "workflow_call",
-                            "error": str(e)
+                            "error": str(e),
+                            "memory": memory
                         }
                     }
                     if attempt < max_retries:

@@ -142,7 +142,7 @@ class WorkflowRunner:
                         "retryDelay": {
                             "type": "number",
                             "minimum": 0,
-                            "description": "Delay in seconds between retry attempts (supports decimal values like 0.5)"
+                            "description": "Delay in seconds between retry attempts (supports decimal values like 0.5). If not specified, inherits the 'delay' value, or defaults to 10 seconds if delay is 0"
                         },
                         "timeout": {
                             "type": "number",
@@ -362,7 +362,8 @@ class WorkflowRunner:
             success_config = step.get('success', {})
             memory_update_config = step.get('memory_update', {})
             delay = step.get('delay', 0)
-            retry_delay = step.get('retryDelay', 1)  # Default to 1 second for backward compatibility
+            # If retryDelay is not specified, inherit delay value as default (or 10 seconds if delay is also 0)
+            retry_delay = step.get('retryDelay', delay if delay > 0 else 10)
             max_retries = step.get('max_retries', 0)
             timeout = step.get('timeout', None)  # No default timeout
             

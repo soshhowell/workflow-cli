@@ -64,7 +64,9 @@ Example workflow JSON format:
             "name": "api_call_with_config",
             "command": "curl -d '{{memory.settings}}' {{memory.api_url}}/status",
             "timeout": {{memory.timeout}},
-            "comment": "JSON config passed as data"
+            "max_retries": 3,
+            "retryDelay": 2.5,
+            "comment": "JSON config passed as data with retry logic"
         },
         {
             "name": "connect_to_first_server",
@@ -146,7 +148,7 @@ Usage examples:
     parser.add_argument(
         "--version",
         action="version",
-        version=f"%(prog)s 0.4.0"
+        version=f"%(prog)s 0.5.0"
     )
     
     return parser
