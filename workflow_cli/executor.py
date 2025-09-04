@@ -338,10 +338,15 @@ class StepExecutor:
         Args:
             data: Dictionary to search in
             key_path: Dot-separated key path (e.g., 'person.name', 'items.0', 'data.users.0.name')
+                     Empty string returns the entire data object
             
         Returns:
             Tuple of (value, found) where found indicates if the key path exists
         """
+        # Handle empty path - return the entire data object
+        if not key_path or key_path.strip() == '':
+            return data, True
+            
         keys = key_path.split('.')
         current = data
         
@@ -369,10 +374,15 @@ class StepExecutor:
         Args:
             data: Dictionary to search in
             key_path: Dot-separated key path (e.g., 'person.name', 'items.0', 'data.users.0.name')
+                     Empty string returns the entire data object
             
         Returns:
             Value at the specified path, or None if not found
         """
+        # Handle empty path - return the entire data object
+        if not key_path or key_path.strip() == '':
+            return data
+            
         keys = key_path.split('.')
         current = data
         
@@ -625,7 +635,7 @@ class StepExecutor:
                         self.logger.warning(f"Invalid memory update config - missing variable")
                     continue
                 
-                if not regex_pattern and not json_path:
+                if not regex_pattern and json_path is None:
                     # Status messages only go to logs in verbose mode
                     if self.logger:
                         self.logger.warning(f"Invalid memory update config - missing regex or json field")
@@ -636,7 +646,7 @@ class StepExecutor:
                 extracted_value = None
                 
                 # Handle JSON path extraction
-                if json_path:
+                if json_path is not None:
                     try:
                         parsed_output = json.loads(output.strip())
                         extracted_value = self._get_nested_value(parsed_output, json_path)
